@@ -11,7 +11,7 @@ from flask import Flask, jsonify
 #################################################
 # Database Setup
 #################################################
-engine = create_engine("sqlite:///Resources/hawaii.sqlite")
+engine = create_engine("sqlite:///Resources/hawaii.sqlite", connect_args={'check_same_thread': False})
 
 # reflect an existing database into a new model
 Base = automap_base()
@@ -22,6 +22,14 @@ Base.prepare(engine, reflect=True)
 Measurement = Base.classes.measurement
 Station = Base.classes.station
 
+# Create session link from python to DB
+session = Session(engine)
+first_date = session.query(Measurement.date).order_by((Measurement.date)).limit(1).all()
+print(first_date[0][0])
+last_date = session.query(Measurement.date).order_by((Measurement.date).desc()).limit(1).all()
+print(last_date[0][0])
+last_12mnth = (dt.datetime.strptime(last_date[0][0], '%Y-%m-%d') - dt.timedelta(days=365)).date()
+print(last_12mnth)
 #################################################
 # Flask Setup
 #################################################
@@ -34,57 +42,88 @@ app = Flask(__name__)
 
 @app.route("/")
 def welcome():
-    """List all available api routes."""
+    # List all available api routes."""
     return (
-        f"Available Routes:<br/>"
-        f"/api/v1.0/precipitation<br/>"
-        f"/api/v1.0/passengers"
+         f"<p>Hawaii weather API!!!!!!</p>"
+        f"<p>All routes available:</p>"
+        f"/api/v1.0/precipitation<br/>Returns a JSON representation of percipitation data for the dates between {last_12mnth} and {last_date[0][0]}<br/><br/>"
+        f"/api/v1.0/stations<br/>Returns a JSON list of the weather stations<br/><br/>"
+        f"/api/v1.0/tobs<br/>Returns a JSON list of the Temperature Observations (tobs) for each station for the dates between {last_12mnth} and {last_date[0][0]}<br/><br/>"
+        f"/api/v1.0/yourstartdate(yyyy-mm-dd)<br/>Returns a JSON list of the minimum temperature, the average temperature, and the max temperature for the dates from the given start date in yyyy-mm-dd format <br/><br/>."
+        f"/api/v1.0/start_date(yyyy-mm-dd)/end_date(yyyy-mm-dd)<br/>Returns a JSON list of the minimum temperature, the average temperature, and the max temperature for the dates between the given start date and end date<br/><br/>."
     )
 
 
-@app.route("/api/v1.0/percipitation")
-def percipitation():
-    # Create our session (link) from Python to the DB
-    session = Session(engine)
-    last_year = dt.date(2017, 8, 23)-dt.timedelta(days = 365)
 
 
-    """Return a list of all passenger names"""
-    # Query all passengers
-    results = session.query(Measurement.date, Measurement.prcp).filter(Measurement.date >= last_year).all()
+@app.route("/api/v1.0/precipitation")
+def precipitation():
+    print("precipitation status:OK")
+    #query to retrieve the last 12 months of precipitation data.
+    results = session.query(Measurement.date, Measurement.prcp).filter(Measurement.date >= last_12mnth)\
+        .filter(Measurement.station == Station.station).all()
+    #Convert the query results to a Dictionary using date as the key and prcp as the value.
+    prcp_totals = []
+    for result in results:
+        row = {}
+        row["date"] = result[0]
+        row["prcp"] = result[1]
+        prcp_totals.append(row)
+    #Return the JSON representation of your dictionary.
+    return jsonify(prcp_totals)
+#########################################################################################
+@app.route("/api/v1.0/tobs")
+def tobs():
+	
+	#query for the dates and temperature observations from a year from the last data point
+	tobs_results = session.query(Measurement.date, Measurement.tobs).\
+	filter(Measurement.date >= last_12mnth).order_by(Measurement.date).all()
+	# Create a list of dicts with `date` and `tobs` as the keys and values
+	tobs_totals = []
+	for result in tobs_results:
+		row = {}
+		row["date"] = result[0]
+		row["tobs"] = result[1]
+		tobs_totals.append(row)
+	#Return a JSON list of Temperature Observations (tobs) for the previous year.
+	return jsonify(tobs_totals)
+#########################################################################################
+@app.route("/api/v1.0/<start>")
+def start_date(start):
 
-    session.close()
+	#convert the tsring from user to date
+	start_date = dt.datetime.strptime(start, '%Y-%m-%d').date()
+	last_date_dd = (dt.datetime.strptime(last_date[0][0], '%Y-%m-%d')).date() 
+	first_date_dd = (dt.datetime.strptime(first_date[0][0], '%Y-%m-%d')).date()
+	#if fgiven start_date greater than last or lesser than first available date in dataset, print the following 
+	if start_date > last_date_dd or start_date < first_date_dd:
+		return(f"Select date range between {first_date[0][0]} and {last_date[0][0]}")
+	else:
+		#Return a JSON list of the minimum temperature, the average temperature, 
+		#and the max temperature for a given start range.
+		start_min_max_temp = session.query(func.min(Measurement.tobs), func.avg(Measurement.tobs),\
+			func.max(Measurement.tobs)).filter(Measurement.date >= start_date).all()
+		start_date_data = list(np.ravel(start_min_max_temp))
+		return jsonify(start_date_data)
 
-    results_dic = {date: prcp for date, prcp in results}
+#########################################################################################
+@app.route("/api/v1.0/<start>/<end>")
+def end_date(start,end):
 
-    # Convert list of tuples into normal list
-   
-
-    return jsonify(results_dic)
-
-
-@app.route("/api/v1.0/passengers")
-def passengers():
-    # Create our session (link) from Python to the DB
-    session = Session(engine)
-
-    """Return a list of passenger data including the name, age, and sex of each passenger"""
-    # Query all passengers
-    results = session.query(Passenger.name, Passenger.age, Passenger.sex).all()
-
-    session.close()
-
-    # Create a dictionary from the row data and append to a list of all_passengers
-    all_passengers = []
-    for name, age, sex in results:
-        passenger_dict = {}
-        passenger_dict["name"] = name
-        passenger_dict["age"] = age
-        passenger_dict["sex"] = sex
-        all_passengers.append(passenger_dict)
-
-    return jsonify(all_passengers)
-
-
-if __name__ == '__main__':
+	start_date = dt.datetime.strptime(start, '%Y-%m-%d').date()
+	end_date = dt.datetime.strptime(end, '%Y-%m-%d').date()
+	last_date_dd = (dt.datetime.strptime(last_date[0][0], '%Y-%m-%d')).date() 
+	first_date_dd = (dt.datetime.strptime(first_date[0][0], '%Y-%m-%d')).date()
+	if start_date > last_date_dd or start_date < first_date_dd or end_date > last_date_dd or\
+	 					end_date < first_date_dd:
+		return(f"Select date range between {first_date[0][0]} and {last_date[0][0]}")
+	else:
+		#Return a JSON list of the minimum temperature, the average temperature, 
+		#and the max temperature for a given start-end range.
+		start_end_min_max_temp = session.query(func.min(Measurement.tobs), func.avg(Measurement.tobs),\
+		 func.max(Measurement.tobs)).\
+		filter(Measurement.date >= start_date).filter(Measurement.date <= end_date).all()
+		start_end_data = list(np.ravel(start_end_min_max_temp))
+		return jsonify(start_end_data)
+if __name__=="__main__":
     app.run(debug=True)
